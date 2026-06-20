@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Tachometer PWA</title>
+  
+  <!-- PWA Support -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#000000">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="apple-touch-icon" href="icon.svg">
+  
+  <!-- CSS Styling -->
+  <link rel="stylesheet" href="style.css">
+  
+  <!-- Leaflet Map CSS (will be cached by service worker for offline use) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+</head>
+<body>
+
+  <!-- Top Status bar -->
+  <header class="status-bar">
+    <div class="status-item gps-status">
+      <span class="status-dot red" id="gps-dot"></span>
+      <span class="status-text" id="gps-text">Kein GPS</span>
+    </div>
+    <div class="status-item connection-status">
+      <span class="status-dot green" id="conn-dot"></span>
+      <span class="status-text" id="conn-text">Online</span>
+    </div>
+    <div class="status-item wakelock-status">
+      <span class="status-icon" id="wake-icon">&#128161;</span>
+      <span class="status-text" id="wake-text">Standby aktiv</span>
+    </div>
+  </header>
+
+  <!-- Main View Container -->
+  <main class="content-container">
+    
+    <!-- VIEW 1: DASHBOARD -->
+    <section id="dashboard-view" class="app-view active">
+      <!-- Analogue Gauge & Digital Speed Wrap -->
+      <div class="speed-display-wrap">
+        
+        <!-- SVG Speedometer Dial -->
+        <svg class="speedometer-svg" viewBox="-30 -10 360 320">
+          <defs>
+            <linearGradient id="speedGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#00f0ff" />
+              <stop offset="100%" stop-color="#39ff14" />
+            </linearGradient>
+            <filter id="neonGlow">
+              <feGaussianBlur stdDeviation="5" result="coloredBlur"/>
+              <feMerge>
+                <feMergeNode in="coloredBlur"/>
+                <feMergeNode in="SourceGraphic"/>
+              </feMerge>
+            </filter>
+          </defs>
+          <!-- Background arc -->
+          <path class="gauge-bg" d="M 82.8 217.2 A 95 95 0 1 1 217.2 217.2" fill="none" stroke="#12151c" stroke-width="12" stroke-linecap="round" />
+          <!-- Active speed arc -->
+          <path class="gauge-fill" id="gauge-fill" d="M 82.8 217.2 A 95 95 0 1 1 217.2 217.2" fill="none" stroke="url(#speedGrad)" stroke-width="12" stroke-linecap="round" stroke-dasharray="448" stroke-dashoffset="448" />
+          
+          <!-- Dynamic speed ticks and labels -->
+          <g id="gauge-ticks"></g>
+          <g id="gauge-labels"></g>
+ 
+          <!-- Needle -->
+          <g id="needle-group" class="needle" transform="rotate(-135 150 150)">
+            <line x1="150" y1="150" x2="150" y2="50" stroke="#ff3860" stroke-width="5" stroke-linecap="round" />
+            <circle cx="150" cy="150" r="10" fill="#ff3860" />
+            <circle cx="150" cy="150" r="4" fill="#ffffff" />
+          </g>
+        </svg>
+
+        <!-- Centered Digital Speed Indicator -->
+        <div class="digital-speed-container">
+          <div class="speed-number" id="speed-number">0.0</div>
+          <div class="speed-unit-toggle" id="unit-toggle">km/h</div>
+        </div>
+
+      </div>
+
+      <!-- Quick Session Stats Grid -->
+      <div class="stats-grid">
+        <div class="stat-card">
+          <span class="stat-label">MAXIMUM</span>
+          <span class="stat-value" id="stat-max">0.0</span>
+          <span class="stat-unit" id="unit-max">km/h</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">SCHNITT</span>
+          <span class="stat-value" id="stat-avg">0.0</span>
+          <span class="stat-unit" id="unit-avg">km/h</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">STRECKE</span>
+          <span class="stat-value" id="stat-dist">0.00</span>
+          <span class="stat-unit">km</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">DAUER</span>
+          <span class="stat-value" id="stat-time">00:00:00</span>
+          <span class="stat-unit">h:m:s</span>
+        </div>
+      </div>
+
+      <!-- Control Button Panel -->
+      <div class="control-panel">
+        <button id="btn-start" class="btn btn-green">
+          <span class="btn-icon">&#9658;</span> Start
+        </button>
+        <button id="btn-pause" class="btn btn-yellow hidden">
+          <span class="btn-icon">&#10074;&#10074;</span> Pause
+        </button>
+        <button id="btn-resume" class="btn btn-cyan hidden">
+          <span class="btn-icon">&#9658;</span> Weiter
+        </button>
+        <button id="btn-stop" class="btn btn-red hidden">
+          <span class="btn-icon">&#9632;</span> Stopp
+        </button>
+      </div>
+    </section>
+
+    <!-- VIEW 2: MAP VIEW -->
+    <section id="map-view" class="app-view">
+      <div class="map-view-wrapper">
+        <div id="map" class="map-container">
+          <!-- Fallback vector plot canvas for offline route viewing -->
+          <canvas id="offline-canvas" class="hidden"></canvas>
+          <div id="map-offline-badge" class="offline-badge hidden">
+            <span>Offline-Modus: Zeige Routenverlauf (Pfad)</span>
+          </div>
+        </div>
+        
+        <!-- Map Overlay Trip Info and Playback Scrubber -->
+        <div class="map-overlay-panel">
+          <div class="route-details-row">
+            <div>
+              <span class="detail-lbl">Strecken-Höchstgeschw.:</span>
+              <strong id="map-route-max">0.0 km/h</strong>
+            </div>
+            <div>
+              <span class="detail-lbl">Distanz:</span>
+              <strong id="map-route-dist">0.00 km</strong>
+            </div>
+          </div>
+          <div class="playback-container">
+            <label for="route-scrubber" class="scrub-label">Routen-Verlauf analysieren:</label>
+            <div class="scrub-controls">
+              <input type="range" id="route-scrubber" class="scrubber-range" min="0" max="100" value="0" disabled>
+              <div class="scrubber-info">
+                <span id="scrub-time">00:00</span>
+                <span id="scrub-speed">0.0 km/h</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- VIEW 3: HISTORY & LOGS -->
+    <section id="history-view" class="app-view">
+      <!-- Sub-navigation tabs inside History view -->
+      <div class="sub-nav">
+        <button id="tab-peaks" class="sub-tab active">Top 50 Peak-Speeds</button>
+        <button id="tab-trips" class="sub-tab">Gespeicherte Strecken</button>
+      </div>
+
+      <div class="history-content">
+        <!-- Peak Speed Log Panel -->
+        <div id="peaks-panel" class="history-panel active">
+          <div class="panel-header">
+            <h3>Höchstgeschwindigkeiten</h3>
+            <button id="btn-clear-peaks" class="btn btn-outline btn-sm">Nicht fixierte löschen</button>
+          </div>
+          <div class="scroll-table-container">
+            <table class="history-table">
+              <thead>
+                <tr>
+                  <th>Rang</th>
+                  <th>Geschw.</th>
+                  <th>Datum / Uhrzeit</th>
+                  <th style="width: 80px; text-align: center;">Fixieren</th>
+                </tr>
+              </thead>
+              <tbody id="peaks-table-body">
+                <!-- Javascript will insert peak speed records here -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Saved Trips List Panel -->
+        <div id="trips-panel" class="history-panel">
+          <div class="panel-header">
+            <h3>Aufgezeichnete Strecken</h3>
+          </div>
+          <div class="trips-list" id="trips-list-container">
+            <!-- Javascript will insert saved trips items here -->
+            <div class="empty-state">Noch keine Strecken aufgezeichnet.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Persistent Bottom Navigation Bar -->
+  <nav class="bottom-nav">
+    <button class="nav-item active" data-view="dashboard-view">
+      <span class="nav-icon">&#9202;</span>
+      <span class="nav-label">Tachometer</span>
+    </button>
+    <button class="nav-item" data-view="map-view" id="nav-map-btn">
+      <span class="nav-icon">&#128506;</span>
+      <span class="nav-label">Strecke</span>
+    </button>
+    <button class="nav-item" data-view="history-view">
+      <span class="nav-icon">&#128340;</span>
+      <span class="nav-label">Verlauf</span>
+    </button>
+  </nav>
+
+  <!-- Dialog for saving route name -->
+  <div id="save-trip-dialog" class="modal hidden">
+    <div class="modal-content">
+      <h3>Streckenaufzeichnung speichern</h3>
+      <p>Gib einen Namen für diese aufgezeichnete Strecke ein:</p>
+      <input type="text" id="trip-name-input" placeholder="Z. B. Fahrt zur Arbeit, Feierabendrunde">
+      <div class="modal-actions">
+        <button id="btn-dialog-discard" class="btn btn-outline">Verwerfen</button>
+        <button id="btn-dialog-save" class="btn btn-green">Speichern</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Leaflet Map JS (will be cached by service worker for offline use) -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  
+  <!-- Core App Controller -->
+  <script src="app.js"></script>
+
+</body>
+</html>
