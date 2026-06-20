@@ -48,7 +48,7 @@ body {
   width: 100vw;
   display: flex;
   flex-direction: column;
-  padding-bottom: 4em;
+  padding-bottom: var(--safe-area-inset-bottom);
 }
 
 /* Status Bar styling */
@@ -144,7 +144,6 @@ body {
 .speed-display-wrap {
   position: relative;
   width: 100%;
-  max-height: 240px;
   max-width: 500px;
   aspect-ratio: 1/1;
   display: flex;
